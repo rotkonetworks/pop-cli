@@ -1,0 +1,17 @@
+[relaychain]
+chain = "polkadot-local"
+
+[[relaychain.nodes]]
+name = "alice"
+validator = true
+
+[[relaychain.nodes]]
+name = "bob"
+validator = true
+
+[[parachains]]
+id = 1000
+chain = "people-polkadot-local"
+
+[[parachains.collators]]
+name = "people-01"
