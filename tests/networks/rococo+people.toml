@@ -10,7 +10,7 @@ name = "bob"
 validator = true
 
 [[parachains]]
-id = 1000
+id = 1004
 chain = "people-rococo-local"
 
 [[parachains.collators]]
