@@ -17,6 +17,7 @@ use {
 mod cli;
 #[cfg(any(feature = "parachain", feature = "contract"))]
 mod commands;
+mod common;
 mod style;
 
 #[tokio::main]
@@ -29,7 +30,8 @@ async fn main() -> Result<()> {
 
 	#[cfg(feature = "telemetry")]
 	if let Some(tel) = maybe_tel.clone() {
-		// `args` is guaranteed to have at least 3 elements as clap will display help message if not set.
+		// `args` is guaranteed to have at least 3 elements as clap will display help message if not
+		// set.
 		let (command, subcommand) = parse_args(args().collect());
 
 		if let Ok(sub_data) = &res {

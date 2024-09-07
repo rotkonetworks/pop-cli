@@ -1,48 +1,40 @@
+{{- let using_currency = pallet_common_types|contains(TemplatePalletConfigCommonTypes::Currency) -}}
 [package]
-name = "^^name^^"
+name = "pallet-^^name|lower^^"
 authors = ["^^authors^^"]
 description = "^^description^^"
 version = "0.1.0"
 license = "Unlicense"
+{{- if pallet_in_workspace }}
+edition.workspace = true
+repository.workspace = true
+{{- else }}
 edition = "2021"
+{{- endif }}
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-codec = { package = "parity-scale-codec", version = "3.0.0", features = ["derive"], default-features = false }
-scale-info = { version = "2.11.1", default-features = false, features = ["derive"] }
+codec = { package = "parity-scale-codec", version = "3.6.1", default-features = false, features = [
+	"derive",
+] }
+scale-info = { version = "2.11.1", default-features = false, features = [
+	"derive",
+] }
+frame = { version = "0.3.0", package = "polkadot-sdk-frame", default-features = false, features = ["experimental", "runtime"] }
 
-# Substrate
-frame-benchmarking = { version = "32.0.0", default-features = false, optional = true}
-frame-support = { version = "32.0.0", default-features = false}
-frame-system = { version = "32.0.0", default-features = false}
-
+{{ if using_currency }}
 [dev-dependencies]
-sp-core = { version = "32.0.0", default-features = false }
-sp-io = { version = "34.0.0", default-features = false}
-sp-runtime = { version = "35.0.0", default-features = false}
+pallet-balances = { version = "35.0.0" }
+{{- endif }}
 
 [features]
-default = [ "std" ]
-runtime-benchmarks = [
-	"frame-benchmarking/runtime-benchmarks",
-	"frame-support/runtime-benchmarks",
-	"frame-system/runtime-benchmarks",
-	"sp-runtime/runtime-benchmarks",
-]
+default = ["std"]
 std = [
 	"codec/std",
-	"frame-benchmarking/std",
-	"frame-support/std",
-	"frame-system/std",
+	"frame/std",
 	"scale-info/std",
-	"sp-core/std",
-	"sp-io/std",
-	"sp-runtime/std",
 ]
-try-runtime = [
-	"frame-support/try-runtime",
-	"frame-system/try-runtime",
-	"sp-runtime/try-runtime",
-]
+runtime-benchmarks = ["frame/runtime-benchmarks"]
+try-runtime = ["frame/try-runtime"]

@@ -3,7 +3,8 @@
 use crate::{errors::Error, APP_USER_AGENT};
 use anyhow::Result;
 use git2::{
-	build::RepoBuilder, FetchOptions, IndexAddOption, RemoteCallbacks, Repository, ResetType,
+	build::RepoBuilder, FetchOptions, IndexAddOption, RemoteCallbacks, Repository as GitRepository,
+	ResetType,
 };
 use git2_credentials::CredentialHandler;
 use regex::Regex;
@@ -35,7 +36,7 @@ impl Git {
 		Ok(())
 	}
 
-	fn ssh_clone(url: &Url, working_dir: &Path) -> Result<Repository> {
+	fn ssh_clone(url: &Url, working_dir: &Path) -> Result<GitRepository> {
 		let ssh_url = GitHub::convert_to_ssh_url(url);
 		// Prepare callback and fetch options.
 		let mut fo = FetchOptions::new();
@@ -58,7 +59,7 @@ impl Git {
 		target: &Path,
 		tag_version: Option<String>,
 	) -> Result<Option<String>> {
-		let repo = match Repository::clone(url, target) {
+		let repo = match GitRepository::clone(url, target) {
 			Ok(repo) => repo,
 			Err(_e) => Self::ssh_clone_and_degit(
 				url::Url::parse(url).map_err(|err| Error::from(err))?,
@@ -92,7 +93,7 @@ impl Git {
 	}
 
 	/// For users that have ssh configuration for cloning repositories.
-	fn ssh_clone_and_degit(url: Url, target: &Path) -> Result<Repository> {
+	fn ssh_clone_and_degit(url: Url, target: &Path) -> Result<GitRepository> {
 		let ssh_url = GitHub::convert_to_ssh_url(&url);
 		// Prepare callback and fetch options.
 		let mut fo = FetchOptions::new();
@@ -118,18 +119,73 @@ impl Git {
 	}
 
 	/// Fetch the latest release from a repository
-	fn fetch_latest_tag(repo: &Repository) -> Option<String> {
-		let version_reg = Regex::new(r"v\d+\.\d+\.\d+").expect("Valid regex");
+	fn fetch_latest_tag(repo: &GitRepository) -> Option<String> {
 		let tags = repo.tag_names(None).ok()?;
-		// Start from latest tags
-		for tag in tags.iter().rev() {
-			if let Some(tag) = tag {
-				if version_reg.is_match(tag) {
-					return Some(tag.to_string());
-				}
-			}
+		Self::parse_latest_tag(tags.iter().flatten().collect::<Vec<_>>())
+	}
+
+	/// Parses a list of tags to identify the latest one, prioritizing tags in the stable format
+	/// first.
+	fn parse_latest_tag(tags: Vec<&str>) -> Option<String> {
+		match Self::parse_stable_format(tags.clone()) {
+			Some(last_stable_tag) => Some(last_stable_tag),
+			None => Self::parse_version_format(tags),
 		}
-		None
+	}
+
+	/// Parse the stable release tags.
+	fn parse_stable_format(tags: Vec<&str>) -> Option<String> {
+		// Regex for polkadot-stableYYMM and polkadot-stableYYMM-X
+		let stable_reg = Regex::new(
+			r"polkadot-stable(?P<year>\d{2})(?P<month>\d{2})(-(?P<patch>\d+))?(-rc\d+)?",
+		)
+		.expect("Valid regex");
+		tags.into_iter()
+			.filter_map(|tag| {
+				// Skip the pre-release label
+				if tag.contains("-rc") {
+					return None;
+				}
+				stable_reg.captures(tag).and_then(|v| {
+					let year = v.name("year")?.as_str().parse::<u32>().ok()?;
+					let month = v.name("month")?.as_str().parse::<u32>().ok()?;
+					let patch =
+						v.name("patch").and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+					Some((tag, (year, month, patch)))
+				})
+			})
+			.max_by(|a, b| {
+				let (_, (year_a, month_a, patch_a)) = a;
+				let (_, (year_b, month_b, patch_b)) = b;
+				// Compare by year, then by month, then by patch number
+				year_a
+					.cmp(year_b)
+					.then_with(|| month_a.cmp(month_b))
+					.then_with(|| patch_a.cmp(patch_b))
+			})
+			.map(|(tag_str, _)| tag_str.to_string())
+	}
+
+	/// Parse the versioning release tags.
+	fn parse_version_format(tags: Vec<&str>) -> Option<String> {
+		// Regex for polkadot-vmajor.minor.patch format
+		let version_reg = Regex::new(r"v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(-rc\d+)?")
+			.expect("Valid regex");
+		tags.into_iter()
+			.filter_map(|tag| {
+				// Skip the pre-release label
+				if tag.contains("-rc") {
+					return None;
+				}
+				version_reg.captures(tag).and_then(|v| {
+					let major = v.name("major")?.as_str().parse::<u32>().ok()?;
+					let minor = v.name("minor")?.as_str().parse::<u32>().ok()?;
+					let patch = v.name("patch")?.as_str().parse::<u32>().ok()?;
+					Some((tag, (major, minor, patch)))
+				})
+			})
+			.max_by_key(|&(_, version)| version)
+			.map(|(tag_str, _)| tag_str.to_string())
 	}
 
 	/// Init a new git repository.
@@ -139,7 +195,7 @@ impl Git {
 	/// * `target` - location where the parachain will be created.
 	/// * `message` - message for first commit.
 	pub fn git_init(target: &Path, message: &str) -> Result<(), git2::Error> {
-		let repo = Repository::init(target)?;
+		let repo = GitRepository::init(target)?;
 		let signature = repo.signature()?;
 
 		let mut index = repo.index()?;
@@ -276,6 +332,41 @@ pub struct Release {
 	pub name: String,
 	pub prerelease: bool,
 	pub commit: Option<String>,
+}
+
+/// A descriptor of a remote repository.
+#[derive(Debug, PartialEq)]
+pub struct Repository {
+	/// The url of the repository.
+	pub url: Url,
+	/// If applicable, the branch or tag to be used.
+	pub reference: Option<String>,
+	/// The name of a package within the repository. Defaults to the repository name.
+	pub package: String,
+}
+
+impl Repository {
+	/// Parses a url in the form of https://github.com/org/repository?package#tag into its component parts.
+	///
+	/// # Arguments
+	/// * `url` - The url to be parsed.
+	pub fn parse(url: &str) -> Result<Self, Error> {
+		let url = Url::parse(url)?;
+		let package = url.query();
+		let reference = url.fragment().map(|f| f.to_string());
+
+		let mut url = url.clone();
+		url.set_query(None);
+		url.set_fragment(None);
+
+		let package = match package {
+			Some(b) => b,
+			None => crate::GitHub::name(&url)?,
+		}
+		.to_string();
+
+		Ok(Self { url, reference, package })
+	}
 }
 
 #[cfg(test)]
@@ -453,5 +544,95 @@ mod tests {
 			),
 			"git@github.com:paritytech/frontier-parachain-template.git"
 		);
+	}
+
+	#[test]
+	fn parse_latest_tag_works() {
+		let mut tags = vec![];
+		assert_eq!(Git::parse_latest_tag(tags), None);
+		tags = vec![
+			"polkadot-stable2407",
+			"polkadot-stable2407-1",
+			"polkadot-v1.10.0",
+			"polkadot-v1.11.0",
+			"polkadot-v1.12.0",
+			"polkadot-v1.7.0",
+			"polkadot-v1.8.0",
+			"polkadot-v1.9.0",
+			"v1.15.1-rc2",
+		];
+		assert_eq!(Git::parse_latest_tag(tags), Some("polkadot-stable2407-1".to_string()));
+	}
+
+	#[test]
+	fn parse_stable_format_works() {
+		let mut tags = vec![];
+		assert_eq!(Git::parse_stable_format(tags), None);
+		tags = vec!["polkadot-stable2407", "polkadot-stable2408"];
+		assert_eq!(Git::parse_stable_format(tags), Some("polkadot-stable2408".to_string()));
+		tags = vec!["polkadot-stable2407", "polkadot-stable2501"];
+		assert_eq!(Git::parse_stable_format(tags), Some("polkadot-stable2501".to_string()));
+		// Skip the pre-release label
+		tags = vec!["polkadot-stable2407", "polkadot-stable2407-1", "polkadot-stable2407-1-rc1"];
+		assert_eq!(Git::parse_stable_format(tags), Some("polkadot-stable2407-1".to_string()));
+	}
+
+	#[test]
+	fn parse_version_format_works() {
+		let mut tags: Vec<&str> = vec![];
+		assert_eq!(Git::parse_version_format(tags), None);
+		tags = vec![
+			"polkadot-v1.10.0",
+			"polkadot-v1.11.0",
+			"polkadot-v1.12.0",
+			"polkadot-v1.7.0",
+			"polkadot-v1.8.0",
+			"polkadot-v1.9.0",
+		];
+		assert_eq!(Git::parse_version_format(tags), Some("polkadot-v1.12.0".to_string()));
+		tags = vec!["v1.0.0", "v2.0.0", "v3.0.0"];
+		assert_eq!(Git::parse_version_format(tags), Some("v3.0.0".to_string()));
+		// Skip the pre-release label
+		tags = vec!["polkadot-v1.12.0", "v1.15.1-rc2"];
+		assert_eq!(Git::parse_version_format(tags), Some("polkadot-v1.12.0".to_string()));
+	}
+
+	mod repository {
+		use super::Error;
+		use crate::git::Repository;
+		use url::Url;
+
+		#[test]
+		fn parsing_full_url_works() {
+			assert_eq!(
+				Repository::parse("https://github.com/org/repository?package#tag").unwrap(),
+				Repository {
+					url: Url::parse("https://github.com/org/repository").unwrap(),
+					reference: Some("tag".into()),
+					package: "package".into(),
+				}
+			);
+		}
+
+		#[test]
+		fn parsing_simple_url_works() {
+			let url = "https://github.com/org/repository";
+			assert_eq!(
+				Repository::parse(url).unwrap(),
+				Repository {
+					url: Url::parse(url).unwrap(),
+					reference: None,
+					package: "repository".into(),
+				}
+			);
+		}
+
+		#[test]
+		fn parsing_invalid_url_returns_error() {
+			assert!(matches!(
+				Repository::parse("github.com/org/repository"),
+				Err(Error::ParseError(..))
+			));
+		}
 	}
 }

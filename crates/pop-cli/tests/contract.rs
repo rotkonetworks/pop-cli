@@ -4,8 +4,8 @@ use anyhow::Result;
 use assert_cmd::Command;
 use pop_common::templates::Template;
 use pop_contracts::{
-	dry_run_gas_estimate_instantiate, instantiate_smart_contract, run_contracts_node,
-	set_up_deployment, Contract, UpOpts,
+	contracts_node_generator, dry_run_gas_estimate_instantiate, instantiate_smart_contract,
+	run_contracts_node, set_up_deployment, Contract, UpOpts,
 };
 use std::{path::Path, process::Command as Cmd};
 use strum::VariantArray;
@@ -35,16 +35,17 @@ async fn contract_lifecycle() -> Result<()> {
 		.args(&["build", "--path", "./test_contract", "--release"])
 		.assert()
 		.success();
-	// Verify that the folder target has been created
+	// Verify that the directory target has been created
 	assert!(temp_dir.join("test_contract/target").exists());
 	// Verify that all the artifacts has been generated
 	assert!(temp_dir.join("test_contract/target/ink/test_contract.contract").exists());
 	assert!(temp_dir.join("test_contract/target/ink/test_contract.wasm").exists());
 	assert!(temp_dir.join("test_contract/target/ink/test_contract.json").exists());
 
-	// Run the contracts node
-	let cache = temp_dir.join("cache");
-	let process = run_contracts_node(cache, None).await?;
+	let binary = contracts_node_generator(temp_dir.to_path_buf().clone(), None).await?;
+	binary.source(false, &(), true).await?;
+	let process = run_contracts_node(binary.path(), None).await?;
+
 	// Only upload the contract
 	// pop up contract --upload-only
 	Command::cargo_bin("pop")
@@ -70,7 +71,8 @@ async fn contract_lifecycle() -> Result<()> {
 		])
 		.assert()
 		.success();
-	// Using methods from the pop_contracts crate to instantiate it to get the Contract Address for the call
+	// Using methods from the pop_contracts crate to instantiate it to get the Contract Address for
+	// the call
 	let instantiate_exec = set_up_deployment(UpOpts {
 		path: Some(temp_dir.join("test_contract")),
 		constructor: "new".to_string(),

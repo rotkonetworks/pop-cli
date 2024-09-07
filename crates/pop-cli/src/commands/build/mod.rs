@@ -5,14 +5,16 @@ use clap::{Args, Subcommand};
 #[cfg(feature = "contract")]
 use contract::BuildContractCommand;
 use duct::cmd;
-#[cfg(feature = "parachain")]
-use parachain::BuildParachainCommand;
 use std::path::PathBuf;
+#[cfg(feature = "parachain")]
+use {parachain::BuildParachainCommand, spec::BuildSpecCommand};
 
 #[cfg(feature = "contract")]
 pub(crate) mod contract;
 #[cfg(feature = "parachain")]
 pub(crate) mod parachain;
+#[cfg(feature = "parachain")]
+pub(crate) mod spec;
 
 /// Arguments for building a project.
 #[derive(Args)]
@@ -42,10 +44,15 @@ pub(crate) enum Command {
 	#[cfg(feature = "parachain")]
 	#[clap(alias = "p")]
 	Parachain(BuildParachainCommand),
-	/// [DEPRECATED] Build a contract, generate metadata, bundle together in a `<name>.contract` file
+	/// [DEPRECATED] Build a contract, generate metadata, bundle together in a `<name>.contract`
+	/// file
 	#[cfg(feature = "contract")]
 	#[clap(alias = "c")]
 	Contract(BuildContractCommand),
+	/// Build a chain specification and its genesis artifacts.
+	#[cfg(feature = "parachain")]
+	#[clap(alias = "s")]
+	Spec(BuildSpecCommand),
 }
 
 impl Command {

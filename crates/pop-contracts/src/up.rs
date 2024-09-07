@@ -20,7 +20,7 @@ use subxt_signer::sr25519::Keypair;
 /// Attributes for the `up` command
 #[derive(Debug, PartialEq)]
 pub struct UpOpts {
-	/// Path to the contract build folder.
+	/// Path to the contract build directory.
 	pub path: Option<PathBuf>,
 	/// The name of the contract constructor to call.
 	pub constructor: String,
@@ -96,7 +96,8 @@ pub async fn set_up_upload(
 	return Ok(upload_exec);
 }
 
-/// Estimate the gas required for instantiating a contract without modifying the state of the blockchain.
+/// Estimate the gas required for instantiating a contract without modifying the state of the
+/// blockchain.
 ///
 /// # Arguments
 ///
@@ -186,7 +187,7 @@ pub async fn upload_smart_contract(
 		.await
 		.map_err(|error_variant| Error::UploadContractError(format!("{:?}", error_variant)))?;
 	if let Some(code_stored) = upload_result.code_stored {
-		return Ok(format!("0x{:?}", code_stored.code_hash));
+		return Ok(format!("{:?}", code_stored.code_hash));
 	} else {
 		let code_hash: String =
 			upload_exec.code().code_hash().iter().map(|b| format!("{:02x}", b)).collect();
@@ -199,7 +200,10 @@ pub async fn upload_smart_contract(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::{create_smart_contract, errors::Error, run_contracts_node, templates::Contract};
+	use crate::{
+		contracts_node_generator, create_smart_contract, errors::Error, run_contracts_node,
+		templates::Contract,
+	};
 	use anyhow::Result;
 	use std::{env, fs, process::Command};
 	use url::Url;
@@ -326,6 +330,7 @@ mod tests {
 		};
 		let upload_exec = set_up_upload(up_opts).await?;
 		let upload_result = dry_run_upload(&upload_exec).await?;
+		assert!(!upload_result.code_hash.starts_with("0x0x"));
 		assert!(upload_result.code_hash.starts_with("0x"));
 		Ok(())
 	}
@@ -335,9 +340,12 @@ mod tests {
 		const LOCALHOST_URL: &str = "ws://127.0.0.1:9944";
 		let temp_dir = generate_smart_contract_test_environment()?;
 		mock_build_process(temp_dir.path().join("testing"))?;
-		// Run contracts-node
-		let cache = temp_dir.path().join("cache");
-		let process = run_contracts_node(cache, None).await?;
+
+		let cache = temp_dir.path().join("");
+
+		let binary = contracts_node_generator(cache.clone(), None).await?;
+		binary.source(false, &(), true).await?;
+		let process = run_contracts_node(binary.path(), None).await?;
 
 		let upload_exec = set_up_upload(UpOpts {
 			path: Some(temp_dir.path().join("testing")),
@@ -354,6 +362,7 @@ mod tests {
 
 		// Only upload a Smart Contract
 		let upload_result = upload_smart_contract(&upload_exec).await?;
+		assert!(!upload_result.starts_with("0x0x"));
 		assert!(upload_result.starts_with("0x"));
 		//Error when Smart Contract has been already uploaded
 		assert!(matches!(
@@ -386,6 +395,7 @@ mod tests {
 			.args(["-s", "TERM", &process.id().to_string()])
 			.spawn()?
 			.wait()?;
+
 		Ok(())
 	}
 }

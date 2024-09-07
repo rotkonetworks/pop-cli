@@ -22,7 +22,7 @@ use url::Url;
 
 /// Attributes for the `call` command.
 pub struct CallOpts {
-	/// Path to the contract build folder.
+	/// Path to the contract build directory.
 	pub path: Option<PathBuf>,
 	/// The address of the contract to call.
 	pub contract: String,
@@ -49,7 +49,6 @@ pub struct CallOpts {
 /// # Arguments
 ///
 /// * `call_opts` - options for the `call` command.
-///
 pub async fn set_up_call(
 	call_opts: CallOpts,
 ) -> anyhow::Result<CallExec<DefaultConfig, DefaultEnvironment, Keypair>> {
@@ -83,7 +82,6 @@ pub async fn set_up_call(
 /// # Arguments
 ///
 /// * `call_exec` - struct with the call to be executed.
-///
 pub async fn dry_run_call(
 	call_exec: &CallExec<DefaultConfig, DefaultEnvironment, Keypair>,
 ) -> Result<String, Error> {
@@ -109,7 +107,6 @@ pub async fn dry_run_call(
 /// # Arguments
 ///
 /// * `call_exec` - the preprocessed data to call a contract.
-///
 pub async fn dry_run_gas_estimate_call(
 	call_exec: &CallExec<DefaultConfig, DefaultEnvironment, Keypair>,
 ) -> Result<Weight, Error> {
@@ -138,7 +135,6 @@ pub async fn dry_run_gas_estimate_call(
 /// * `call_exec` - struct with the call to be executed.
 /// * `gas_limit` - maximum amount of gas to be used for this call.
 /// * `url` - endpoint of the node which to send the call to.
-///
 pub async fn call_smart_contract(
 	call_exec: CallExec<DefaultConfig, DefaultEnvironment, Keypair>,
 	gas_limit: Weight,
@@ -162,8 +158,9 @@ pub async fn call_smart_contract(
 mod tests {
 	use super::*;
 	use crate::{
-		create_smart_contract, dry_run_gas_estimate_instantiate, errors::Error,
-		instantiate_smart_contract, run_contracts_node, set_up_deployment, Contract, UpOpts,
+		contracts_node_generator, create_smart_contract, dry_run_gas_estimate_instantiate,
+		errors::Error, instantiate_smart_contract, run_contracts_node, set_up_deployment, Contract,
+		UpOpts,
 	};
 	use anyhow::Result;
 	use sp_core::Bytes;
@@ -236,7 +233,7 @@ mod tests {
 		Ok(())
 	}
 	#[tokio::test]
-	async fn test_set_up_call_fails_no_smart_contract_folder() -> Result<()> {
+	async fn test_set_up_call_fails_no_smart_contract_directory() -> Result<()> {
 		let call_opts = CallOpts {
 			path: None,
 			contract: "5CLPm1CeUvJhZ8GCDZCR7nWZ2m3XXe4X5MtAQK69zEjut36A".to_string(),
@@ -309,9 +306,12 @@ mod tests {
 		const LOCALHOST_URL: &str = "ws://127.0.0.1:9944";
 		let temp_dir = generate_smart_contract_test_environment()?;
 		mock_build_process(temp_dir.path().join("testing"))?;
-		// Run the contracts-node.
-		let cache = temp_dir.path().join("cache");
-		let process = run_contracts_node(cache, None).await?;
+
+		let cache = temp_dir.path().join("");
+
+		let binary = contracts_node_generator(cache.clone(), None).await?;
+		binary.source(false, &(), true).await?;
+		let process = run_contracts_node(binary.path(), None).await?;
 		// Instantiate a Smart Contract.
 		let instantiate_exec = set_up_deployment(UpOpts {
 			path: Some(temp_dir.path().join("testing")),
@@ -369,6 +369,7 @@ mod tests {
 			.args(["-s", "TERM", &process.id().to_string()])
 			.spawn()?
 			.wait()?;
+
 		Ok(())
 	}
 }

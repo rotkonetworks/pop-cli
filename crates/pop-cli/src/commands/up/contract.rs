@@ -2,6 +2,7 @@
 
 use crate::{
 	cli::{traits::Cli as _, Cli},
+	common::contracts::check_contracts_node_and_prompt,
 	style::style,
 };
 use clap::Args;
@@ -15,10 +16,9 @@ use pop_contracts::{
 };
 use sp_core::Bytes;
 use sp_weights::Weight;
-use std::process::Child;
 use std::{
 	path::{Path, PathBuf},
-	process::Command,
+	process::{Child, Command},
 };
 use tempfile::NamedTempFile;
 use url::Url;
@@ -29,7 +29,7 @@ const FAILED: &str = "🚫 Deployment failed.";
 
 #[derive(Args, Clone)]
 pub struct UpContractCommand {
-	/// Path to the contract build folder.
+	/// Path to the contract build directory.
 	#[arg(short = 'p', long)]
 	path: Option<PathBuf>,
 	/// The name of the contract constructor to call.
@@ -70,7 +70,8 @@ pub struct UpContractCommand {
 	/// Uploads the contract only, without instantiation.
 	#[clap(short('u'), long)]
 	upload_only: bool,
-	/// Before starting a local node, do not ask the user for confirmation.
+	/// Automatically source or update the needed binary required without prompting for
+	/// confirmation.
 	#[clap(short('y'), long)]
 	skip_confirm: bool,
 }
@@ -80,7 +81,7 @@ impl UpContractCommand {
 	pub(crate) async fn execute(mut self) -> anyhow::Result<()> {
 		Cli.intro("Deploy a smart contract")?;
 
-		// Check if build exists in the specified "Contract build folder"
+		// Check if build exists in the specified "Contract build directory"
 		if !has_contract_been_built(self.path.as_deref()) {
 			// Build the contract in release mode
 			Cli.warning("NOTE: contract has not yet been built.")?;
@@ -124,10 +125,23 @@ impl UpContractCommand {
 			// Update url to that of the launched node
 			self.url = Url::parse(DEFAULT_URL).expect("default url is valid");
 
+			let log = NamedTempFile::new()?;
+
+			// uses the cache location
+			let binary_path = match check_contracts_node_and_prompt(self.skip_confirm).await {
+				Ok(binary_path) => binary_path,
+				Err(_) => {
+					Cli.outro_cancel(
+						"🚫 You need to specify an accessible endpoint to deploy the contract.",
+					)?;
+					return Ok(());
+				},
+			};
+
 			let spinner = spinner();
 			spinner.start("Starting local node...");
-			let log = NamedTempFile::new()?;
-			let process = run_contracts_node(crate::cache()?, Some(log.as_file())).await?;
+
+			let process = run_contracts_node(binary_path, Some(log.as_file())).await?;
 			let bar = Style::new().magenta().dim().apply_to(Emoji("│", "|"));
 			spinner.stop(format!(
 				"Local node started successfully:{}",
@@ -299,10 +313,12 @@ impl From<UpContractCommand> for UpOpts {
 	}
 }
 
-/// Checks if a contract has been built by verifying the existence of the build directory and the <name>.contract file.
+/// Checks if a contract has been built by verifying the existence of the build directory and the
+/// <name>.contract file.
 ///
 /// # Arguments
-/// * `path` - An optional path to the project directory. If no path is provided, the current directory is used.
+/// * `path` - An optional path to the project directory. If no path is provided, the current
+///   directory is used.
 pub fn has_contract_been_built(path: Option<&Path>) -> bool {
 	let project_path = path.unwrap_or_else(|| Path::new("./"));
 	let manifest = match from_path(Some(project_path)) {
@@ -310,8 +326,8 @@ pub fn has_contract_been_built(path: Option<&Path>) -> bool {
 		Err(_) => return false,
 	};
 	let contract_name = manifest.package().name();
-	project_path.join("target/ink").exists()
-		&& project_path.join(format!("target/ink/{}.contract", contract_name)).exists()
+	project_path.join("target/ink").exists() &&
+		project_path.join(format!("target/ink/{}.contract", contract_name)).exists()
 }
 
 #[cfg(test)]
