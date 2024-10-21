@@ -9,6 +9,7 @@ use crate::{
 	},
 	Status,
 };
+use regex::Regex;
 use std::path::{Path, PathBuf};
 
 /// A binary used to launch a node.
@@ -121,36 +122,50 @@ impl Binary {
 	}
 
 	fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-		let parse_version = |v: &str| -> (Option<u32>, Option<u32>) {
-			if v.starts_with('v') {
-				let parts: Vec<&str> = v[1..].split('.').collect();
-				(
-					parts.get(0).and_then(|s| s.parse().ok()),
-					parts.get(1).and_then(|s| s.parse().ok()),
-				)
-			} else if v.starts_with("polkadot-stable") {
-				let version_part = &v["polkadot-stable".len()..];
-				if let Ok(version_num) = version_part.parse::<u32>() {
-					let major = version_num / 100;
-					let minor = version_num % 100;
-					(Some(major), Some(minor))
-				} else {
-					(None, None)
-				}
-			} else {
-				(None, None)
-			}
-		};
-
-		let (a_major, a_minor) = parse_version(a);
-		let (b_major, b_minor) = parse_version(b);
+		let (a_major, a_minor, a_patch) = Self::parse_version(a);
+		let (b_major, b_minor, b_patch) = Self::parse_version(b);
 
 		match (a_major, b_major) {
-			(Some(a), Some(b)) if a != b => a.cmp(&b),
-			(Some(_), Some(_)) => a_minor.cmp(&b_minor),
+			(Some(a_ma), Some(b_ma)) => match a_ma.cmp(&b_ma) {
+				std::cmp::Ordering::Equal => match (a_minor, b_minor) {
+					(Some(a_mi), Some(b_mi)) => match a_mi.cmp(&b_mi) {
+						std::cmp::Ordering::Equal => a_patch.cmp(&b_patch),
+						other => other,
+					},
+					(Some(_), None) => std::cmp::Ordering::Greater,
+					(None, Some(_)) => std::cmp::Ordering::Less,
+					(None, None) => a_patch.cmp(&b_patch),
+				},
+				other => other,
+			},
 			(Some(_), None) => std::cmp::Ordering::Greater,
 			(None, Some(_)) => std::cmp::Ordering::Less,
 			(None, None) => a.cmp(b),
+		}
+	}
+
+	fn parse_version(v: &str) -> (Option<u32>, Option<u32>, Option<u32>) {
+		let re_v = Regex::new(r"^v(\d+)\.(\d+)\.(\d+)(?:-.*)?$").unwrap();
+		let re_polkadot_stable = Regex::new(r"^polkadot-stable(\d+)(?:-(\d+))?$").unwrap();
+
+		if let Some(caps) = re_v.captures(v) {
+			let major = caps.get(1).and_then(|m| m.as_str().parse().ok());
+			let minor = caps.get(2).and_then(|m| m.as_str().parse().ok());
+			let patch = caps.get(3).and_then(|m| m.as_str().parse().ok());
+			(major, minor, patch)
+		} else if let Some(caps) = re_polkadot_stable.captures(v) {
+			let version_num = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok());
+			let patch = caps.get(2).and_then(|m| m.as_str().parse().ok());
+
+			if let Some(version_num) = version_num {
+				let major = version_num / 100;
+				let minor = version_num % 100;
+				(Some(major), Some(minor), patch)
+			} else {
+				(None, None, None)
+			}
+		} else {
+			(None, None, None)
 		}
 	}
 
