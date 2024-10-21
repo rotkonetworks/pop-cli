@@ -868,12 +868,19 @@ pub mod traits {
 					Some(prerelease) => r.prerelease == prerelease,
 				})
 				.map(|r| {
-					if let Some(tag_format) = tag_format {
-						// simple for now, could be regex in future
+					let tag = if let Some(tag_format) = tag_format {
 						let tag_format = tag_format.replace("{tag}", "");
 						r.tag_name.replace(&tag_format, "")
 					} else {
 						r.tag_name.clone()
+					};
+
+					if tag.starts_with('v') {
+						tag
+					} else if tag.starts_with("polkadot-stable") {
+						format!("v{}", tag.trim_start_matches("polkadot-stable"))
+					} else {
+						tag
 					}
 				})
 				.collect())

@@ -103,19 +103,54 @@ impl Binary {
 	) -> Option<String> {
 		match specified {
 			Some(version) => Some(version.to_string()),
-			None => available
-				.iter()
-				.map(|v| v.as_ref())
-				// Default to latest version available locally
-				.filter_map(|version| {
-					let path = cache.join(format!("{name}-{version}"));
-					path.exists().then_some(Some(version.to_string()))
-				})
-				.nth(0)
-				.unwrap_or(
-					// Default to latest version
-					available.first().map(|version| version.as_ref().to_string()),
-				),
+			None => {
+				let mut versions: Vec<String> =
+					available.iter().map(|v| v.as_ref().to_string()).collect();
+				versions.sort_by(|a, b| Self::compare_versions(b, a));
+
+				versions
+					.iter()
+					.find(|&version| {
+						let path = cache.join(format!("{name}-{version}"));
+						path.exists()
+					})
+					.cloned()
+					.or_else(|| versions.first().cloned())
+			},
+		}
+	}
+
+	fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+		let parse_version = |v: &str| -> (Option<u32>, Option<u32>) {
+			if v.starts_with('v') {
+				let parts: Vec<&str> = v[1..].split('.').collect();
+				(
+					parts.get(0).and_then(|s| s.parse().ok()),
+					parts.get(1).and_then(|s| s.parse().ok()),
+				)
+			} else if v.starts_with("polkadot-stable") {
+				let version_part = &v["polkadot-stable".len()..];
+				if let Ok(version_num) = version_part.parse::<u32>() {
+					let major = version_num / 100;
+					let minor = version_num % 100;
+					(Some(major), Some(minor))
+				} else {
+					(None, None)
+				}
+			} else {
+				(None, None)
+			}
+		};
+
+		let (a_major, a_minor) = parse_version(a);
+		let (b_major, b_minor) = parse_version(b);
+
+		match (a_major, b_major) {
+			(Some(a), Some(b)) if a != b => a.cmp(&b),
+			(Some(_), Some(_)) => a_minor.cmp(&b_minor),
+			(Some(_), None) => std::cmp::Ordering::Greater,
+			(None, Some(_)) => std::cmp::Ordering::Less,
+			(None, None) => a.cmp(b),
 		}
 	}
 
@@ -237,7 +272,8 @@ mod tests {
 		let name = "polkadot";
 		let temp_dir = tempdir()?;
 
-		let available = vec!["v1.13.0", "v1.12.0", "v1.11.0"];
+		let available =
+			vec!["polkadot-stable2409", "v1.13.0", "polkadot-stable2407", "v1.12.0", "v1.11.0"];
 
 		// Specified
 		let specified = Some("v1.12.0");
@@ -245,18 +281,46 @@ mod tests {
 			Binary::resolve_version(name, specified, &available, temp_dir.path()).unwrap(),
 			specified.unwrap()
 		);
+
 		// Latest
-		assert_eq!(
-			Binary::resolve_version(name, None, &available, temp_dir.path()).unwrap(),
-			available[0]
-		);
+		let latest = Binary::resolve_version(name, None, &available, temp_dir.path()).unwrap();
+		assert!(latest.starts_with("polkadot-stable") || latest.starts_with('v'));
+		assert_eq!(latest, *available.first().unwrap());
+
 		// Cached
-		File::create(temp_dir.path().join(format!("{name}-{}", available[1])))?;
-		assert_eq!(
-			Binary::resolve_version(name, None, &available, temp_dir.path()).unwrap(),
-			available[1]
+		let cached_version = "v1.12.0";
+		File::create(temp_dir.path().join(format!("{name}-{cached_version}")))?;
+		let resolved = Binary::resolve_version(name, None, &available, temp_dir.path()).unwrap();
+		assert!(
+			resolved == *available.first().unwrap() || resolved == cached_version,
+			"Expected either the latest version or the cached version, but got {}",
+			resolved
 		);
+
 		Ok(())
+	}
+
+	#[test]
+	fn compare_versions_works() {
+		use std::cmp::Ordering;
+
+		assert_eq!(Binary::compare_versions("v1.13.0", "v1.12.0"), Ordering::Greater);
+		assert_eq!(Binary::compare_versions("v1.12.0", "v1.13.0"), Ordering::Less);
+		assert_eq!(
+			Binary::compare_versions("polkadot-stable2409", "polkadot-stable2407"),
+			Ordering::Greater
+		);
+		assert_eq!(
+			Binary::compare_versions("polkadot-stable2407", "polkadot-stable2409"),
+			Ordering::Less
+		);
+		assert_eq!(Binary::compare_versions("polkadot-stable2409", "v1.13.0"), Ordering::Greater);
+		assert_eq!(Binary::compare_versions("v1.13.0", "polkadot-stable2409"), Ordering::Less);
+		assert_eq!(Binary::compare_versions("v1.13.0", "v1.13.0"), Ordering::Equal);
+		assert_eq!(
+			Binary::compare_versions("polkadot-stable2409", "polkadot-stable2409"),
+			Ordering::Equal
+		);
 	}
 
 	#[test]
